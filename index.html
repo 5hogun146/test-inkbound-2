@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,orientation=landscape">
+<title>INKBOUND — Vertical Slice</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#171313;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#title,#dialog,#gameover{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#f8edda;font-family:Georgia,serif;background:#0009;z-index:10}
+.panel{width:min(680px,90vw);padding:28px 30px;background:#211d1beF;border:2px solid #f8edda55;border-radius:12px;box-shadow:0 18px 70px #000}
+h1{font-size:clamp(42px,10vw,76px);margin:0 0 4px;letter-spacing:5px}h2{margin:5px 0 16px;font-size:25px}p{font-size:17px;line-height:1.5}
+button{border:0;border-radius:7px;background:#e5b94e;color:#171313;font:bold 18px Georgia;padding:14px 28px}
+.hide{display:none!important}.hint{opacity:.55;font-size:12px}
+#rotate{display:none;position:fixed;inset:0;z-index:50;background:#171313;color:#f8edda;align-items:center;justify-content:center;text-align:center;font:24px Georgia}
+#rotate span{font-size:15px;opacity:.65}
+@media (orientation:portrait){#rotate{display:flex}}
+@media (orientation:landscape) and (max-height:500px){.touch{width:62px;height:62px;bottom:10px}.panel{padding:18px}.panel h1{font-size:44px}.panel p{font-size:14px;margin:8px 0}.panel button{padding:10px 20px}}
+.touch{position:fixed;z-index:5;bottom:18px;width:74px;height:74px;border:2px solid #fff8;background:#181818aa;color:#fff;border-radius:50%;font:bold 28px system-ui}
+#tl{left:18px}#tr{left:105px}#jump{right:105px}#dash{right:18px}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotate"><div><b>ROTATE YOUR PHONE</b><br><span>Play INKBOUND in landscape</span></div></div>
+
+<div id="title"><div class="panel">
+<h1>INKBOUND</h1><h2>THE LAST MATCH</h2>
+<p>A playable vertical slice.</p>
+<p>Rook must cross Bellweather and reach the old theatre. Something inside is waiting.</p>
+<button id="start">PLAY</button>
+<p class="hint">Mobile touch controls • A/D or ←/→ • W/↑/Space • Shift/X to dash</p>
+</div></div>
+
+<div id="dialog" class="hide"><div class="panel">
+<h2 id="dh"></h2><p id="dp"></p><button id="next">CONTINUE</button>
+</div></div>
+
+<div id="gameover" class="hide"><div class="panel">
+<h1 id="endtitle">GAME OVER</h1><p id="endtext"></p><button id="restart">RESTART</button>
+</div></div>
+
+<button class="touch" id="tl">◀</button><button class="touch" id="tr">▶</button>
+<button class="touch" id="jump">↑</button><button class="touch" id="dash">◆</button>
+
+<script>
+'use strict';
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d',{alpha:false});
+const VW=1280,VH=720;
+let W=VW,H=VH,D=1,viewScale=1,viewX=0,viewY=0;
+function resize(){
+  D=Math.min(devicePixelRatio||1,2);
+  canvas.width=Math.floor(innerWidth*D);
+  canvas.height=Math.floor(innerHeight*D);
+  canvas.style.width=innerWidth+'px';
+  canvas.style.height=innerHeight+'px';
+  viewScale=Math.min(innerWidth/VW,innerHeight/VH);
+  viewX=(innerWidth-VW*viewScale)/2;
+  viewY=(innerHeight-VH*viewScale)/2;
+}
+addEventListener('resize',resize);resize();
+function beginFrame(){
+  ctx.setTransform(D,0,0,D,0,0);
+  ctx.clearRect(0,0,innerWidth,innerHeight);
+  ctx.translate(viewX,viewY);
+  ctx.scale(viewScale,viewScale);
+}
+
+const input={left:false,right:false,jump:false,dash:false};
+function button(id,key){
+ const b=document.getElementById(id);
+ const on=e=>{e.preventDefault();input[key]=true};
+ const off=e=>{e.preventDefault();input[key]=false};
+ b.addEventListener('pointerdown',on);b.addEventListener('pointerup',off);b.addEventListener('pointercancel',off);b.addEventListener('pointerleave',off);
+}
+button('tl','left');button('tr','right');button('jump','jump');button('dash','dash');
+addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();
+ if(k==='a'||k==='arrowleft')input.left=true;
+ if(k==='d'||k==='arrowright')input.right=true;
+ if(k==='w'||k==='arrowup'||k===' ')input.jump=true;
+ if(k==='shift'||k==='x')input.dash=true;
+});
+addEventListener('keyup',e=>{
+ const k=e.key.toLowerCase();
+ if(k==='a'||k==='arrowleft')input.left=false;
+ if(k==='d'||k==='arrowright')input.right=false;
+ if(k==='w'||k==='arrowup'||k===' ')input.jump=false;
+ if(k==='shift'||k==='x')input.dash=false;
+});
+
+let player,platforms,spikes,coins,enemies,boss,cam=0,started=false,dialog=false,won=false;
+const WORLD=3600;
+
+function setup(){
+ player={x:100,y:0,w:30,h:44,vx:0,vy:0,on:false,hp:5,inv:0,face:1,dash:0};
+ platforms=[
+ [0,.70,520,100],[620,.56,250,34],[950,.72,350,100],
+ [1380,.53,300,34],[1740,.68,430,100],[2240,.55,310,34],
+ [2660,.70,420,100],[3160,.53,320,34],[3480,.70,300,100]
+ ];
+ spikes=[[465,.67,55,30],[815,.53,55,30],[1270,.67,60,30],[1660,.50,60,30],
+ [2150,.65,70,30],[2580,.67,65,30],[3060,.50,65,30],[3410,.67,60,30]];
+ coins=[];
+ for(let i=0;i<12;i++)coins.push({x:260+i*265,y:.45+(i%3)*.08,got:false});
+ enemies=[
+ {x:1120,y:0,w:38,h:38,v:1.4,hp:3,min:990,max:1280},
+ {x:1860,y:0,w:38,h:38,v:-1.2,hp:3,min:1760,max:2110},
+ {x:2770,y:0,w:38,h:38,v:1.5,hp:3,min:2680,max:3040}
+ ];
+ boss={x:3000,y:0,w:110,h:110,hp:18,max:18,t:0,active:false};
+ cam=0;won=false;
+ snapPlayerToGround();
+}
+function sy(v){return VH*v}
+function snapPlayerToGround(){
+ player.y=sy(.70)-player.h;
+}
+function box(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+function hurt(){
+ if(player.inv>0||won)return;
+ player.hp--;player.inv=75;player.vy=-8;player.vx=-player.face*6;
+ if(player.hp<=0)finish(false);
+}
+function finish(win){
+ won=win;started=false;
+ document.getElementById('gameover').classList.remove('hide');
+ document.getElementById('endtitle').textContent=win?'THE END':'GAME OVER';
+ document.getElementById('endtext').textContent=win?
+ 'Rook reaches the theatre. The last match flares—and for one second, Bellweather remembers the sun.':
+ 'The match goes out. Rook wakes at the beginning of the road.';
+ document.getElementById('restart').textContent=win?'PLAY AGAIN':'RETRY';
+}
+function update(dt){
+ if(!started||dialog||won)return;
+ const p=player, f=dt*60;
+ if(input.left){p.vx-=.72*f;p.face=-1}
+ if(input.right){p.vx+=.72*f;p.face=1}
+ p.vx*=Math.pow(.82,f);p.vx=Math.max(-7,Math.min(7,p.vx));
+ if(input.jump&&p.on){p.vy=-13;p.on=false}
+ if(input.dash&&p.dash<=0){p.vx=p.face*15;p.dash=38}
+ p.dash-=f;p.vy=Math.min(15,p.vy+.58*f);
+ const oldY=p.y;
+ p.x+=p.vx;
+ for(const s of platforms){
+  const r={x:s[0],y:sy(s[1]),w:s[2],h:s[3]};
+  if(box(p,r)){if(p.vx>0)p.x=s[0]-p.w;else if(p.vx<0)p.x=s[0]+s[2];p.vx=0}
+ }
+ p.y+=p.vy;p.on=false;
+ for(const s of platforms){
+  const r={x:s[0],y:sy(s[1]),w:s[2],h:s[3]};
+  if(box(p,r)){
+   if(p.vy>=0&&oldY+p.h<=r.y+8){p.y=r.y-p.h;p.vy=0;p.on=true}
+   else if(p.vy<0){p.y=r.y+r.h;p.vy=0}
+  }
+ }
+ for(const s of spikes)if(box(p,{x:s[0],y:sy(s[1]),w:s[2],h:s[3]}))hurt();
+ for(const e of enemies){
+  if(e.hp<=0)continue;
+  e.y=sy(.72)-e.h;
+  e.x+=e.v*f;
+  if(e.x<e.min||e.x>e.max)e.v*=-1;
+  if(box(p,e))hurt();
+ }
+ for(const c of coins)if(!c.got&&Math.hypot(p.x+15-c.x,p.y+22-sy(c.y))<32)c.got=true;
+ boss.y=sy(.30)+Math.sin(boss.t/18)*25;boss.t+=f;
+ if(p.x>2500)boss.active=true;
+ if(boss.active&&boss.hp>0){
+   if(box(p,boss))hurt();
+   if(p.dash>22&&box(p,boss)){boss.hp--;p.dash=0}
+ }
+ if(p.y>H+150){p.hp=0;finish(false);return}
+ if(p.inv>0)p.inv-=f;
+ cam+=(p.x-VW*.32-cam)*.09;cam=Math.max(0,Math.min(cam,WORLD-VW*.7));
+ if(p.x>WORLD-130&&boss.hp<=0)finish(true);
+}
+function draw(){
+ beginFrame();
+ const g=ctx.createLinearGradient(0,0,0,VH);g.addColorStop(0,'#181a25');g.addColorStop(1,'#5a382b');
+ ctx.fillStyle=g;ctx.fillRect(0,0,VW,VH);
+ ctx.fillStyle='#0d0e12';
+ for(let i=0;i<60;i++){let x=(i*105-cam*.18)%(VW+130)-70,h=70+(i*43%190);ctx.fillRect(x,VH*.70-h,76,h)}
+ ctx.save();ctx.translate(-cam,0);
+ for(const s of platforms){ctx.fillStyle='#29262a';ctx.fillRect(s[0],sy(s[1]),s[2],s[3]);ctx.fillStyle='#d8ae55';ctx.fillRect(s[0],sy(s[1]),s[2],4)}
+ for(const s of spikes){ctx.fillStyle='#c94e55';ctx.beginPath();ctx.moveTo(s[0],sy(s[1])+s[3]);ctx.lineTo(s[0]+s[2]/2,sy(s[1]));ctx.lineTo(s[0]+s[2],sy(s[1])+s[3]);ctx.fill()}
+ for(const c of coins)if(!c.got){ctx.fillStyle='#f0c85c';ctx.beginPath();ctx.arc(c.x,sy(c.y),9+Math.sin(performance.now()/140+c.x)*2,0,Math.PI*2);ctx.fill()}
+ for(const e of enemies)if(e.hp>0){ctx.fillStyle='#824744';ctx.fillRect(e.x,e.y,e.w,e.h);ctx.fillStyle='#f4ead8';ctx.fillRect(e.x+7,e.y+8,7,7);ctx.fillRect(e.x+24,e.y+8,7,7)}
+ if(boss.active&&boss.hp>0){
+   ctx.fillStyle='#6c659f';ctx.fillRect(boss.x,boss.y,boss.w,boss.h);
+   ctx.fillStyle='#17151b';ctx.fillRect(boss.x+19,boss.y+26,17,17);ctx.fillRect(boss.x+73,boss.y+26,17,17);
+   ctx.fillStyle='#f4ead8';ctx.fillRect(boss.x,boss.y-16,boss.w*(boss.hp/boss.max),7);
+ }
+ // theatre door
+ ctx.fillStyle='#e3b84e';ctx.fillRect(WORLD-130,sy(.42),70,sy(.28));ctx.fillStyle='#151318';ctx.fillRect(WORLD-116,sy(.46),42,sy(.24));
+ ctx.fillStyle='#fff';ctx.font='bold 19px Georgia';ctx.fillText('THEATRE',WORLD-160,sy(.39));
+ const p=player;
+ if(p.inv%10<6){ctx.fillStyle='#eee5d4';ctx.fillRect(p.x,p.y,p.w,p.h);ctx.fillStyle='#302328';ctx.fillRect(p.face>0?p.x+19:p.x+5,p.y+9,6,6);ctx.fillStyle='#bd4e5d';ctx.fillRect(p.x-4,p.y+28,38,5)}
+ ctx.restore();
+ ctx.fillStyle='#fff';ctx.font='bold 15px system-ui';ctx.fillText('INKBOUND  •  BELLWEATHER',16,24);
+ ctx.fillText('♥'.repeat(Math.max(0,player.hp))+'   ◆ DASH',16,47);
+ ctx.fillText('120 FPS READY',VW-125,24);
+}
+function showDialog(title,text){
+ document.getElementById('dh').textContent=title;document.getElementById('dp').textContent=text;
+ document.getElementById('dialog').classList.remove('hide');dialog=true;
+}
+document.getElementById('start').onclick=()=>{
+ document.getElementById('title').classList.add('hide');setup();started=true;
+ showDialog('THE LAST MATCH','The sun vanished three nights ago. Rook has one living match and one impossible delivery: reach the old theatre before the flame dies.');
+};
+document.getElementById('next').onclick=()=>{document.getElementById('dialog').classList.add('hide');dialog=false};
+document.getElementById('restart').onclick=()=>{
+ document.getElementById('gameover').classList.add('hide');setup();started=true;
+ showDialog('THE ROAD AGAIN','The match is lit. The road is waiting.');
+};
+let last=performance.now();
+function loop(t){const dt=Math.min((t-last)/1000,.033);last=t;update(dt);draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+</script></body></html>
