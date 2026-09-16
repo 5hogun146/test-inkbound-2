@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>INKBOUND — Bellweather</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#171313;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#rotate{display:none;position:fixed;inset:0;z-index:20;background:#171313;color:#f7ead5;align-items:center;justify-content:center;text-align:center;font:700 24px Georgia}
+#rotate span{display:block;margin-top:8px;font:15px Georgia;opacity:.65}
+@media(orientation:portrait){#rotate{display:flex}}
+#menu,#dialog,#end{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;text-align:center;color:#f7ead5;background:#0009;font-family:Georgia,serif}
+.card{width:min(700px,88vw);padding:26px 30px;background:#211d1df2;border:2px solid #fff4;border-radius:12px;box-shadow:0 18px 70px #000}
+h1{font-size:clamp(42px,8vw,72px);margin:0 0 4px;letter-spacing:5px}
+h2{font-size:25px;margin:4px 0 16px}p{font-size:17px;line-height:1.5}
+button.main{border:0;border-radius:7px;background:#e5b94e;color:#171313;font:bold 18px Georgia;padding:13px 28px}
+.hide{display:none!important}
+.touch{position:fixed;z-index:5;bottom:max(12px,env(safe-area-inset-bottom));width:70px;height:70px;border:2px solid #fff9;background:#151515aa;color:#fff;border-radius:50%;font:bold 27px system-ui}
+#left{left:max(14px,env(safe-area-inset-left))}#right{left:94px}
+#jump{right:94px}#dash{right:max(14px,env(safe-area-inset-right))}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="rotate"><div>ROTATE PHONE<span>INKBOUND is designed for horizontal play</span></div></div>
+
+<div id="menu"><div class="card">
+<h1>INKBOUND</h1><h2>THE LAST MATCH</h2>
+<p>Bellweather has lost its sunrise. Rook, a broke courier carrying the last living match, has one night to reach the old theatre.</p>
+<button class="main" id="play">PLAY</button>
+<p style="opacity:.55;font-size:12px">Touch controls • 120 Hz displays supported when the device/browser allows it</p>
+</div></div>
+
+<div id="dialog" class="hide"><div class="card">
+<h2 id="dialogTitle"></h2><p id="dialogText"></p><button class="main" id="continue">CONTINUE</button>
+</div></div>
+
+<div id="end" class="hide"><div class="card">
+<h1 id="endTitle"></h1><p id="endText"></p><button class="main" id="again">RESTART</button>
+</div></div>
+
+<button class="touch" id="left">◀</button><button class="touch" id="right">▶</button>
+<button class="touch" id="jump">↑</button><button class="touch" id="dash">◆</button>
+
+<script>
+'use strict';
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d',{alpha:false});
+const VW=1280,VH=720;
+let scale=1,ox=0,oy=0,dpr=1;
+
+function resize(){
+ dpr=Math.min(window.devicePixelRatio||1,2);
+ canvas.width=Math.round(innerWidth*dpr);
+ canvas.height=Math.round(innerHeight*dpr);
+ scale=Math.min(innerWidth/VW,innerHeight/VH);
+ ox=(innerWidth-VW*scale)/2;
+ oy=(innerHeight-VH*scale)/2;
+}
+addEventListener('resize',resize);resize();
+
+const input={left:false,right:false,jump:false,dash:false};
+function bind(id,key){
+ const b=document.getElementById(id);
+ const down=e=>{e.preventDefault();input[key]=true};
+ const up=e=>{e.preventDefault();input[key]=false};
+ b.addEventListener('pointerdown',down);
+ b.addEventListener('pointerup',up);
+ b.addEventListener('pointercancel',up);
+ b.addEventListener('pointerleave',up);
+}
+bind('left','left');bind('right','right');bind('jump','jump');bind('dash','dash');
+
+addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();
+ if(k==='a'||k==='arrowleft')input.left=true;
+ if(k==='d'||k==='arrowright')input.right=true;
+ if(k==='w'||k==='arrowup'||k===' ')input.jump=true;
+ if(k==='shift'||k==='x')input.dash=true;
+});
+addEventListener('keyup',e=>{
+ const k=e.key.toLowerCase();
+ if(k==='a'||k==='arrowleft')input.left=false;
+ if(k==='d'||k==='arrowright')input.right=false;
+ if(k==='w'||k==='arrowup'||k===' ')input.jump=false;
+ if(k==='shift'||k==='x')input.dash=false;
+});
+
+let player,platforms,spikes,coins,enemies,boss;
+let started=false,pausedStory=true,dead=false,won=false,cam=0;
+const WORLD=3900;
+
+function sy(n){return n*VH}
+
+function resetGame(){
+ player={x:110,y:0,w:30,h:44,vx:0,vy:0,on:false,hp:5,inv:0,face:1,dash:0};
+ platforms=[
+  [0,504,520,110],[620,403,250,35],[950,518,350,96],
+  [1400,382,300,35],[1760,490,430,130],[2290,396,330,35],
+  [2710,504,420,110],[3180,382,330,35],[3540,504,360,110]
+ ];
+ spikes=[
+  [465,474,55,30],[815,373,55,30],[1250,488,60,30],[1640,352,60,30],
+  [2160,460,70,30],[2630,474,65,30],[3100,352,65,30],[3470,474,60,30]
+ ];
+ coins=[];
+ for(let i=0;i<13;i++)coins.push({x:260+i*275,y:300+(i%3)*55,got:false});
+ enemies=[
+  {x:1080,y:480,w:38,h:38,v:1.3,min:970,max:1240,hp:3},
+  {x:1870,y:452,w:38,h:38,v:-1.2,min:1770,max:2110,hp:3},
+  {x:2790,y:466,w:38,h:38,v:1.5,min:2720,max:3040,hp:3}
+ ];
+ boss={x:3030,y:180,w:120,h:120,hp:18,max:18,t:0,active:false};
+ cam=0;dead=false;won=false;
+ player.y=platforms[0][1]-player.h;
+}
+
+function overlap(a,b){
+ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+
+function hurt(){
+ if(player.inv>0||dead||won)return;
+ player.hp--;
+ player.inv=80;
+ player.vy=-8;
+ player.vx=-player.face*6;
+ if(player.hp<=0){
+  dead=true;started=false;
+  document.getElementById('endTitle').textContent='GAME OVER';
+  document.getElementById('endText').textContent='The last match goes dark. Try the road again.';
+  document.getElementById('again').textContent='RETRY';
+  document.getElementById('end').classList.remove('hide');
+ }
+}
+
+function story(title,text){
+ document.getElementById('dialogTitle').textContent=title;
+ document.getElementById('dialogText').textContent=text;
+ document.getElementById('dialog').classList.remove('hide');
+ pausedStory=true;
+}
+
+function update(dt){
+ if(!started||pausedStory||dead||won)return;
+ const f=dt*60,p=player;
+
+ if(input.left){p.vx-=.72*f;p.face=-1}
+ if(input.right){p.vx+=.72*f;p.face=1}
+ p.vx*=Math.pow(.82,f);
+ p.vx=Math.max(-7,Math.min(7,p.vx));
+
+ if(input.jump&&p.on){p.vy=-13;p.on=false}
+ if(input.dash&&p.dash<=0){p.vx=p.face*15;p.dash=38}
+ p.dash-=f;
+ p.vy=Math.min(15,p.vy+.58*f);
+
+ const oldY=p.y;
+ p.x+=p.vx;
+
+ for(const s of platforms){
+  const r={x:s[0],y:s[1],w:s[2],h:s[3]};
+  if(overlap(p,r)){
+   if(p.vx>0)p.x=r.x-p.w;
+   else if(p.vx<0)p.x=r.x+r.w;
+   p.vx=0;
+  }
+ }
+
+ p.y+=p.vy;p.on=false;
+ for(const s of platforms){
+  const r={x:s[0],y:s[1],w:s[2],h:s[3]};
+  if(overlap(p,r)){
+   if(p.vy>=0&&oldY+p.h<=r.y+8){p.y=r.y-p.h;p.vy=0;p.on=true}
+   else if(p.vy<0){p.y=r.y+r.h;p.vy=0}
+  }
+ }
+
+ for(const s of spikes){
+  if(overlap(p,{x:s[0],y:s[1],w:s[2],h:s[3]}))hurt();
+ }
+
+ for(const e of enemies){
+  if(e.hp<=0)continue;
+  e.y=452;
+  e.x+=e.v*f;
+  if(e.x<e.min||e.x>e.max)e.v*=-1;
+  if(overlap(p,e))hurt();
+ }
+
+ for(const c of coins){
+  if(!c.got&&Math.hypot(p.x+15-c.x,p.y+22-c.y)<34)c.got=true;
+ }
+
+ if(p.x>2500)boss.active=true;
+ boss.t+=f;
+ boss.y=180+Math.sin(boss.t/18)*28;
+ if(boss.active&&boss.hp>0){
+  if(overlap(p,boss))hurt();
+  if(p.dash>22&&overlap(p,boss)){boss.hp--;p.dash=0}
+ }
+
+ if(p.y>850){dead=true;started=false;document.getElementById('end').classList.remove('hide');document.getElementById('endTitle').textContent='FELL INTO THE DARK';document.getElementById('endText').textContent='Rook falls back to the beginning.'}
+
+ if(p.inv>0)p.inv-=f;
+
+ cam+=(p.x-VW*.34-cam)*.09;
+ cam=Math.max(0,Math.min(cam,WORLD-VW*.7));
+
+ if(p.x>WORLD-150&&boss.hp<=0){
+  won=true;started=false;
+  document.getElementById('endTitle').textContent='DAWN RETURNS';
+  document.getElementById('endText').textContent='Rook reaches the theatre. The match flares. Somewhere beyond the ninth bell, morning begins.';
+  document.getElementById('again').textContent='PLAY AGAIN';
+  document.getElementById('end').classList.remove('hide');
+ }
+}
+
+function beginCanvas(){
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+ ctx.clearRect(0,0,innerWidth,innerHeight);
+ ctx.fillStyle='#171313';
+ ctx.fillRect(0,0,innerWidth,innerHeight);
+ ctx.translate(ox,oy);
+ ctx.scale(scale,scale);
+}
+
+function draw(){
+ beginCanvas();
+
+ let sky=ctx.createLinearGradient(0,0,0,VH);
+ sky.addColorStop(0,'#191b27');sky.addColorStop(1,'#58382e');
+ ctx.fillStyle=sky;ctx.fillRect(0,0,VW,VH);
+
+ // distant skyline
+ ctx.fillStyle='#0d0e12';
+ for(let i=0;i<55;i++){
+  const bx=(i*120-cam*.16)%(VW+160)-80;
+  const bh=80+(i*43%190);
+  ctx.fillRect(bx,VH*.70-bh,82,bh);
+ }
+
+ ctx.save();
+ ctx.translate(-cam,0);
+
+ for(const s of platforms){
+  ctx.fillStyle='#29262a';ctx.fillRect(s[0],s[1],s[2],s[3]);
+  ctx.fillStyle='#d7ad54';ctx.fillRect(s[0],s[1],s[2],4);
+ }
+
+ for(const s of spikes){
+  ctx.fillStyle='#cf5058';
+  ctx.beginPath();ctx.moveTo(s[0],s[1]+s[3]);ctx.lineTo(s[0]+s[2]/2,s[1]);ctx.lineTo(s[0]+s[2],s[1]+s[3]);ctx.fill();
+ }
+
+ for(const c of coins)if(!c.got){
+  ctx.fillStyle='#efc65b';ctx.beginPath();
+  ctx.arc(c.x,c.y,9+Math.sin(performance.now()/150+c.x)*2,0,Math.PI*2);ctx.fill();
+ }
+
+ for(const e of enemies)if(e.hp>0){
+  ctx.fillStyle='#814644';ctx.fillRect(e.x,e.y,e.w,e.h);
+  ctx.fillStyle='#f5ead9';ctx.fillRect(e.x+7,e.y+8,7,7);ctx.fillRect(e.x+24,e.y+8,7,7);
+ }
+
+ if(boss.active&&boss.hp>0){
+  ctx.fillStyle='#6b659d';ctx.fillRect(boss.x,boss.y,boss.w,boss.h);
+  ctx.fillStyle='#17151b';ctx.fillRect(boss.x+20,boss.y+27,18,18);ctx.fillRect(boss.x+78,boss.y+27,18,18);
+  ctx.fillStyle='#f4ead8';ctx.fillRect(boss.x,boss.y-17,boss.w*(boss.hp/boss.max),7);
+  ctx.fillStyle='#fff';ctx.font='bold 16px Georgia';ctx.fillText('THE THEATRE KEEPER',boss.x-8,boss.y-28);
+ }
+
+ // finish door
+ ctx.fillStyle='#e5b94e';ctx.fillRect(WORLD-135,330,78,174);
+ ctx.fillStyle='#17141a';ctx.fillRect(WORLD-121,350,50,154);
+ ctx.fillStyle='#fff';ctx.font='bold 18px Georgia';ctx.fillText('THEATRE',WORLD-157,318);
+
+ const p=player;
+ if(p.inv<=0||Math.floor(p.inv/5)%2===0){
+  ctx.fillStyle='#eee5d4';ctx.fillRect(p.x,p.y,p.w,p.h);
+  ctx.fillStyle='#302329';ctx.fillRect(p.face>0?p.x+19:p.x+5,p.y+9,6,6);
+  ctx.fillStyle='#bb4e5c';ctx.fillRect(p.x-4,p.y+29,38,5);
+ }
+
+ ctx.restore();
+
+ ctx.fillStyle='#fff';
+ ctx.font='bold 15px system-ui';
+ ctx.fillText('INKBOUND  •  BELLWEATHER',16,24);
+ ctx.fillText('♥'.repeat(Math.max(0,player.hp))+'   ◆ DASH',16,47);
+ ctx.fillText('120 FPS READY',VW-126,24);
+}
+
+document.getElementById('play').onclick=()=>{
+ document.getElementById('menu').classList.add('hide');
+ resetGame();started=true;
+ story('THE LAST MATCH','The sun vanished three nights ago. Rook has one living match and one impossible delivery: reach the old theatre before the flame dies.');
+};
+
+document.getElementById('continue').onclick=()=>{
+ document.getElementById('dialog').classList.add('hide');pausedStory=false;
+};
+
+document.getElementById('again').onclick=()=>{
+ document.getElementById('end').classList.add('hide');
+ resetGame();started=true;
+ story('THE ROAD AGAIN','The match is lit. Bellweather is waiting.');
+};
+
+let last=performance.now();
+function loop(t){
+ const dt=Math.min(.033,(t-last)/1000);last=t;
+ update(dt);draw();
+ requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
